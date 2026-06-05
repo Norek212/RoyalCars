@@ -163,7 +163,7 @@ async function updateLivePanel(client, guild, config) {
         if (!panelMsg) return false;
 
         const updatedEmbed = new EmbedBuilder()
-            .setTitle('🎫 Support Tickets')
+            .setTitle('🎫 RoyalCars Tickety')
             .setDescription(config.ticketPanelMessage || 'Click the button below to create a support ticket.')
             .setColor(getColor('info'));
 
