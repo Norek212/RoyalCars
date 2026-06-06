@@ -1,89 +1,139 @@
-const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const {
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  AttachmentBuilder,
+  EmbedBuilder,
+} = require('discord.js');
+const https = require('https');
+const http = require('http');
+const { URL } = require('url');
 
 module.exports = {
   data: new SlashCommandBuilder()
-    .setName('kopiuj')
-    .setDescription('Kopiuje wiadomości z kanału i wysyła je jako bot')
-    .addChannelOption((option) =>
-      option
-        .setName('skad')
-        .setDescription('Kanał źródłowy (skąd kopiować)')
-        .setRequired(true)
+    .setName('kopiuj-kanal')
+    .setDescription('Kopiuje wszystkie wiadomości z kanału i wysyła je na inny kanał')
+    .addChannelOption((o) =>
+      o.setName('źródło').setDescription('Kanał do skopiowania').setRequired(true)
     )
-    .addChannelOption((option) =>
-      option
-        .setName('dokad')
-        .setDescription('Kanał docelowy (gdzie wklejać)')
-        .setRequired(true)
+    .addChannelOption((o) =>
+      o.setName('cel').setDescription('Kanał docelowy').setRequired(true)
     )
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .addIntegerOption((o) =>
+      o.setName('limit').setDescription('Ile wiadomości skopiować (domyślnie: wszystkie, max 500)').setRequired(false).setMinValue(1).setMaxValue(500)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
 
   async execute(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    const sourceChannel = interaction.options.getChannel('źródło');
+    const targetChannel = interaction.options.getChannel('cel');
+    const limit = interaction.options.getInteger('limit') || 500;
 
-    const sourceChannel = interaction.options.getChannel('skad');
-    const targetChannel = interaction.options.getChannel('dokad');
+    await interaction.reply({
+      content: `⏳ Pobieram wiadomości z ${sourceChannel}...`,
+      ephemeral: true,
+    });
 
-    // Pobierz wszystkie wiadomości
+    // Pobierz wiadomości (Discord zwraca max 100 na raz, więc robimy pętle)
     let allMessages = [];
     let lastId = null;
 
-    try {
-      while (true) {
-        const options = { limit: 100 };
-        if (lastId) options.before = lastId;
+    while (allMessages.length < limit) {
+      const fetchLimit = Math.min(100, limit - allMessages.length);
+      const options = { limit: fetchLimit };
+      if (lastId) options.before = lastId;
 
-        const messages = await sourceChannel.messages.fetch(options);
-        if (messages.size === 0) break;
+      const batch = await sourceChannel.messages.fetch(options);
+      if (batch.size === 0) break;
 
-        allMessages = allMessages.concat([...messages.values()]);
-        lastId = messages.last().id;
+      allMessages.push(...batch.values());
+      lastId = batch.last().id;
 
-        if (messages.size < 100) break;
-      }
-    } catch (err) {
-      return interaction.editReply('❌ Nie mogę odczytać wiadomości z tego kanału.');
+      if (batch.size < fetchLimit) break;
     }
 
-    if (allMessages.length === 0) {
-      return interaction.editReply('❌ Brak wiadomości do skopiowania.');
-    }
-
+    // Odwróć kolejność (od najstarszej do najnowszej)
     allMessages.reverse();
 
-    // Utwórz webhook na kanale docelowym
-    let webhook;
-    try {
-      webhook = await targetChannel.createWebhook({
-        name: interaction.client.user.username,
-        avatar: interaction.client.user.displayAvatarURL(),
-      });
-    } catch (err) {
-      return interaction.editReply('❌ Nie mogę utworzyć webhooka na kanale docelowym (sprawdź uprawnienia).');
-    }
+    await interaction.editReply({
+      content: `⏳ Znaleziono **${allMessages.length}** wiadomości. Kopiuję...`,
+    });
 
-    await interaction.editReply(`⏳ Kopiowanie ${allMessages.length} wiadomości...`);
+    let sent = 0;
+    let errors = 0;
 
-    let copied = 0;
     for (const msg of allMessages) {
-      if (!msg.content && msg.attachments.size === 0) continue;
-
       try {
-        await webhook.send({
-          content: msg.content || ' ',
-          username: interaction.client.user.username,
-          avatarURL: interaction.client.user.displayAvatarURL(),
-          files: [...msg.attachments.values()].map((a) => a.url),
-        });
-        copied++;
-      } catch (err) {
-        console.error('[KOPIUJ] Błąd przy wysyłaniu wiadomości:', err);
-      }
+        // Pomiń wiadomości systemowe i puste bez załączników
+        if (!msg.content && msg.attachments.size === 0 && msg.embeds.length === 0) continue;
 
-      await new Promise((res) => setTimeout(res, 1000));
+        const attachments = [];
+
+        // Pobierz pliki i obrazki jako AttachmentBuilder
+        for (const attachment of msg.attachments.values()) {
+          try {
+            const buffer = await downloadFile(attachment.url);
+            const file = new AttachmentBuilder(buffer, { name: attachment.name });
+            attachments.push(file);
+          } catch (e) {
+            console.error(`[COPY] Nie udało się pobrać załącznika: ${attachment.url}`, e.message);
+            errors++;
+          }
+        }
+
+        // Zbuduj nagłówek z info o autorze (webhookowy styl)
+        const authorLine = `**${msg.author.username}** • <t:${Math.floor(msg.createdTimestamp / 1000)}:f>`;
+        const content = msg.content ? `${authorLine}\n${msg.content}` : authorLine;
+
+        // Wyślij wiadomość
+        const payload = { content };
+        if (attachments.length > 0) payload.files = attachments;
+
+        // Jeśli oryginał miał embed, dołącz go też
+        if (msg.embeds.length > 0) {
+          payload.embeds = msg.embeds.slice(0, 10); // max 10 embedów
+        }
+
+        await targetChannel.send(payload);
+        sent++;
+
+        // Małe opóźnienie żeby nie trafić w rate limit
+        await sleep(700);
+      } catch (err) {
+        console.error(`[COPY] Błąd przy wiadomości ${msg.id}:`, err.message);
+        errors++;
+      }
     }
 
-    await webhook.delete();
-    await interaction.editReply(`✅ Skopiowano **${copied}** wiadomości z <#${sourceChannel.id}> do <#${targetChannel.id}>.`);
+    await interaction.editReply({
+      content: `✅ Gotowe! Skopiowano **${sent}** wiadomości na ${targetChannel}.${errors > 0 ? `\n⚠️ Błędy: **${errors}** (np. niedostępne pliki)` : ''}`,
+    });
   },
 };
+
+// ─── Pobierz plik jako Buffer ──────────────────────────────────────────────────
+function downloadFile(url) {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url);
+    const lib = parsedUrl.protocol === 'https:' ? https : http;
+
+    lib.get(url, { timeout: 15000 }, (res) => {
+      // Obsługa redirectów
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        return downloadFile(res.headers.location).then(resolve).catch(reject);
+      }
+      if (res.statusCode !== 200) {
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    }).on('error', reject).on('timeout', () => reject(new Error('Timeout')));
+  });
+}
+
+// ─── Sleep helper ──────────────────────────────────────────────────────────────
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
