@@ -59,7 +59,7 @@ export default {
         .setTitle('Ticket Opened')
         .setDescription(`${interaction.user} has created a new ${config.emoji} **${config.label}** ticket.`)
         .addFields({ name: 'W czym możemy ci pomóc', value: reason })
-        .setColor(0x5865f2)
+        .setColor(0xff4141)
         .setFooter({ text: 'RoyalCars | /close' });
 
       const row = new ActionRowBuilder().addComponents(
