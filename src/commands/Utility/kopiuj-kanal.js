@@ -72,11 +72,10 @@ export default {
           }
         }
 
-        const timestamp = Math.floor(msg.createdTimestamp / 1000);
-        const header = `**${msg.author.username}** • <t:${timestamp}:f>`;
-        const content = msg.content ? `${header}\n${msg.content}` : header;
+        const content = msg.content || null;
 
-        const payload = { content };
+        const payload = {};
+        if (content) payload.content = content;
         if (attachments.length > 0) payload.files = attachments;
         if (msg.embeds.length > 0) payload.embeds = msg.embeds.slice(0, 10);
 
