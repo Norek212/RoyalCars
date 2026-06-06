@@ -22,38 +22,53 @@ async function generateTranscript(channel) {
 
   const users = new Map();
   for (const msg of messages) {
-    const key = msg.author.id;
-    users.set(key, { tag: msg.author.username, count: (users.get(key)?.count ?? 0) + 1 });
+    users.set(msg.author.id, {
+      tag: msg.author.username,
+      count: (users.get(msg.author.id)?.count ?? 0) + 1,
+    });
   }
 
-  const usersInTranscript = [...users.entries()]
-    .sort((a, b) => b[1].count - a[1].count)
-    .map(([id, u]) => `  ${u.count} - @${u.tag} (${id})`)
-    .join('\n');
+  const lines = [];
 
-  const lines = [
-    `<Server-Info>`,
-    `    Server:   ${channel.guild.name} (${channel.guild.id})`,
-    `    Channel:  ${channel.name} (${channel.id})`,
-    `    Messages: ${messages.length}`,
-    `</Server-Info>`,
-    ``,
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    `Users in transcript:`,
-    usersInTranscript,
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    ``,
-  ];
+  lines.push(`================================================`);
+  lines.push(`  TRANSCRIPT — ${channel.name}`);
+  lines.push(`  Serwer:    ${channel.guild.name}`);
+  lines.push(`  Kanał ID:  ${channel.id}`);
+  lines.push(`  Wiadomości: ${messages.length}`);
+  lines.push(`================================================`);
+  lines.push(``);
+  lines.push(`Uczestnicy:`);
+  for (const [, u] of users) {
+    lines.push(`  • ${u.tag} (${u.count} wiadomości)`);
+  }
+  lines.push(``);
+  lines.push(`------------------------------------------------`);
+  lines.push(``);
 
   for (const msg of messages) {
-    const date = new Date(msg.createdTimestamp).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' });
-    lines.push(`[${date}] ${msg.author.username}`);
-    if (msg.content) lines.push(`  ${msg.content}`);
-    for (const a of msg.attachments.values()) {
-      lines.push(`  [Załącznik: ${a.name} — ${a.url}]`);
+    if (msg.author.bot && !msg.content) continue;
+
+    const date = new Date(msg.createdTimestamp).toLocaleString('pl-PL', {
+      timeZone: 'Europe/Warsaw',
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+
+    if (msg.content) {
+      lines.push(`${msg.author.username} [${date}]`);
+      lines.push(`  ${msg.content}`);
     }
-    lines.push('');
+
+    for (const a of msg.attachments.values()) {
+      lines.push(`${msg.author.username} [${date}]`);
+      lines.push(`  [Plik: ${a.name}] ${a.url}`);
+    }
+
+    lines.push(``);
   }
+
+  lines.push(`------------------------------------------------`);
+  lines.push(`Koniec transkryptu`);
 
   return lines.join('\n');
 }
@@ -70,20 +85,18 @@ export const rcTicketClose = {
     await interaction.deferReply();
 
     try {
-      // Generuj transcript
       const transcript = await generateTranscript(channel);
       const fileName = `transcript-${channel.name}.txt`;
       const attachment = new AttachmentBuilder(Buffer.from(transcript, 'utf-8'), { name: fileName });
 
-      // Wyślij logi
       const logChannel = interaction.guild.channels.cache.get(LOG_CHANNEL_ID);
       if (logChannel) {
         const logEmbed = new EmbedBuilder()
           .setTitle('🔒 Ticket Zamknięty')
           .addFields(
-            { name: 'Kanał', value: `${channel.name} (${channel.id})`, inline: true },
-            { name: 'Zamknął', value: `${interaction.user} (${interaction.user.id})`, inline: true },
-            { name: 'Wiadomości', value: `${transcript.split('\n').filter(l => l.startsWith('[') ).length}`, inline: true },
+            { name: 'Kanał', value: `${channel.name}`, inline: true },
+            { name: 'Zamknął', value: `${interaction.user}`, inline: true },
+            { name: 'Wiadomości', value: `${transcript.split('\n').filter(l => l.match(/^\w.+\[\d{2}\/\d{2}\/\d{4}/)).length}`, inline: true },
           )
           .setColor(0xff4141)
           .setTimestamp();
