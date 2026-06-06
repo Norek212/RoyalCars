@@ -15,7 +15,7 @@ export default {
     const embed = new EmbedBuilder()
       .setTitle('Wsparcie i zakup')
       .setDescription('Kliknij poniżej aby stworzyć ticketa')
-      .setColor(0x5865f2)
+      .setColor(0xff4141)
       .setFooter({ text: 'Powered by RoyalCars' });
 
     const menu = new StringSelectMenuBuilder()
